@@ -2,6 +2,21 @@
 
 import type { SpriteCraftProjectSummary } from "~/server/spritecraft-backend";
 
+export type WorkspaceLinkedProject = {
+	id: string;
+	label: string;
+	createdAt: string;
+	updatedAt: string | null;
+	tags: string[];
+	animation: string;
+	layerCount: number;
+};
+
+export type WorkspaceLoadPayload = {
+	project: SpriteCraftProjectSummary;
+	relatedProjects: WorkspaceLinkedProject[];
+};
+
 export type CatalogWorkspaceDraft = {
 	name: string;
 	query: string;
@@ -10,6 +25,10 @@ export type CatalogWorkspaceDraft = {
 	promptHistory: string[];
 	sourceProjectId: string | null;
 	sourceProjectLabel: string | null;
+	relatedProjects: WorkspaceLinkedProject[];
+	replaceByType: boolean;
+	activeTypeFocus: string | null;
+	activeStagedItemId: string | null;
 	bodyType: string;
 	animation: string;
 	category: string;
@@ -52,6 +71,55 @@ export function normalizeWorkspaceDraft(
 		sourceProjectLabel:
 			typeof draft.sourceProjectLabel === "string"
 				? draft.sourceProjectLabel
+				: null,
+		relatedProjects: Array.isArray(draft.relatedProjects)
+			? draft.relatedProjects.flatMap((entry) => {
+					if (!entry || typeof entry !== "object") {
+						return [];
+					}
+
+					const project = entry as Partial<WorkspaceLinkedProject>;
+					if (typeof project.id !== "string" || !project.id) {
+						return [];
+					}
+
+					return [
+						{
+							id: project.id,
+							label:
+								typeof project.label === "string" && project.label
+									? project.label
+									: "Saved project",
+							createdAt:
+								typeof project.createdAt === "string"
+									? project.createdAt
+									: new Date().toISOString(),
+							updatedAt:
+								typeof project.updatedAt === "string"
+									? project.updatedAt
+									: null,
+							tags: Array.isArray(project.tags)
+								? project.tags.filter(
+										(value): value is string => typeof value === "string",
+									)
+								: [],
+							animation:
+								typeof project.animation === "string"
+									? project.animation
+									: "idle",
+							layerCount:
+								typeof project.layerCount === "number" ? project.layerCount : 0,
+						},
+					];
+				})
+			: [],
+		replaceByType:
+			typeof draft.replaceByType === "boolean" ? draft.replaceByType : true,
+		activeTypeFocus:
+			typeof draft.activeTypeFocus === "string" ? draft.activeTypeFocus : null,
+		activeStagedItemId:
+			typeof draft.activeStagedItemId === "string"
+				? draft.activeStagedItemId
 				: null,
 		bodyType: typeof draft.bodyType === "string" ? draft.bodyType : "male",
 		animation: typeof draft.animation === "string" ? draft.animation : "idle",
@@ -110,6 +178,10 @@ export function projectToWorkspaceDraft(
 		promptHistory: [...project.promptHistory],
 		sourceProjectId: project.id,
 		sourceProjectLabel: project.projectName ?? project.prompt ?? "Saved project",
+		relatedProjects: [],
+		replaceByType: true,
+		activeTypeFocus: null,
+		activeStagedItemId: Object.keys(project.selections)[0] ?? null,
 		bodyType: project.bodyType,
 		animation: project.animation,
 		category,
@@ -118,4 +190,61 @@ export function projectToWorkspaceDraft(
 		variantChoices: { ...project.selections },
 		savedAt: new Date().toISOString(),
 	};
+}
+
+export function summarizeLinkedProject(
+	project: SpriteCraftProjectSummary,
+): WorkspaceLinkedProject {
+	return {
+		id: project.id,
+		label: project.projectName ?? project.prompt ?? "Saved project",
+		createdAt: project.createdAt,
+		updatedAt: project.updatedAt ?? null,
+		tags: [...project.tags],
+		animation: project.animation,
+		layerCount: Object.keys(project.selections).length,
+	};
+}
+
+export function getRelatedWorkspaceProjects(
+	project: SpriteCraftProjectSummary,
+	projects: SpriteCraftProjectSummary[],
+): WorkspaceLinkedProject[] {
+	const lineageIds = new Set(
+		[
+			project.id,
+			typeof project.renderSettings?.sourceProjectId === "string"
+				? project.renderSettings.sourceProjectId
+				: null,
+		].filter((value): value is string => Boolean(value)),
+	);
+	const projectLabel = project.projectName?.trim() ?? "";
+	const projectPrompt = project.prompt?.trim() ?? "";
+
+	return projects
+		.filter((entry) => {
+			const entryLineageId =
+				typeof entry.renderSettings?.sourceProjectId === "string"
+					? entry.renderSettings.sourceProjectId
+					: null;
+			if (
+				lineageIds.has(entry.id) ||
+				(entryLineageId ? lineageIds.has(entryLineageId) : false)
+			) {
+				return true;
+			}
+
+			if (projectLabel && entry.projectName?.trim() === projectLabel) {
+				return true;
+			}
+
+			return Boolean(projectPrompt && entry.prompt?.trim() === projectPrompt);
+		})
+		.sort(
+			(left, right) =>
+				new Date(right.updatedAt ?? right.createdAt).getTime() -
+				new Date(left.updatedAt ?? left.createdAt).getTime(),
+		)
+		.slice(0, 6)
+		.map((entry) => summarizeLinkedProject(entry));
 }
